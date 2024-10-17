@@ -1,0 +1,4 @@
+# test_import.py
+from backend.db import get_db_connection
+
+print("Importación exitosa")
