@@ -1,41 +1,34 @@
 from datetime import datetime, timedelta
 import jwt  # Asegúrate de que sea la biblioteca PyJWT
+import base64
 from functools import wraps
-from flask import request, jsonify, Blueprint
+from flask import request, jsonify
 
 # Clave secreta para firmar los JWT
-SECRET_KEY = '1234'  # Considera usar una clave más compleja en producción
+SECRET_KEY = '1234'
 ALGORITHM = 'HS256'
 EXPIRATION_TIME = 3600  # 1 hora de duración del token
-
-# Definición del Blueprint
-auth_blueprint = Blueprint('auth', __name__)
 
 # Función para generar el token JWT
 def generate_token(username):
     try:
-        return jwt.encode(
-            {
-                'sub': username,  # Identificador del sujeto (usuario)
-                'exp': datetime.utcnow() + timedelta(seconds=EXPIRATION_TIME)  # Tiempo de expiración
-            },
-            SECRET_KEY,
-            algorithm=ALGORITHM
-        )
-    except Exception as e:
-        raise Exception(f"Error al generar el token: {str(e)}")
+        # Crear el payload
+        payload = {
+            'sub': username,  # Identificador del sujeto (usuario)
+            'exp': datetime.utcnow() + timedelta(seconds=EXPIRATION_TIME)  # Tiempo de expiración
+        }
 
-# Endpoint para autenticar y generar el token
-@auth_blueprint.route('/autenticar_servicio', methods=['GET'])
-def autenticar_servicio():
-    username = "admin"  # Este puede ser cualquier valor o lógica que desees usar
-    try:
-        token = generate_token(username)
-        return jsonify({"token": token}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        # Generar el token
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-# Decorador para proteger otros endpoints
+        # Codificar el token en Base64 (opcional)
+        base64_token = base64.urlsafe_b64encode(token.encode()).decode()
+
+        return base64_token
+    except Exception as e:
+        return None, f"Error al generar el token: {str(e)}"
+
+# Decorador para proteger las rutas con JWT
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -49,8 +42,11 @@ def token_required(f):
             return jsonify({"status": "error", "message": "Token es necesario"}), 401
 
         try:
+            # Decodificar el token de Base64
+            decoded_token = base64.urlsafe_b64decode(token.encode()).decode()
+
             # Decodificar el token JWT
-            data = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            data = jwt.decode(decoded_token, SECRET_KEY, algorithms=[ALGORITHM])
         except jwt.ExpiredSignatureError:
             return jsonify({"status": "error", "message": "Token ha expirado"}), 401
         except jwt.InvalidTokenError:
