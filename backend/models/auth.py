@@ -28,7 +28,7 @@ def generate_token(username):
     except Exception as e:
         return None, f"Error al generar el token: {str(e)}"
 
-# Decorador para proteger las rutas con JWT
+
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -42,11 +42,8 @@ def token_required(f):
             return jsonify({"status": "error", "message": "Token es necesario"}), 401
 
         try:
-            # Decodificar el token de Base64
-            decoded_token = base64.urlsafe_b64decode(token.encode()).decode()
-
             # Decodificar el token JWT
-            data = jwt.decode(decoded_token, SECRET_KEY, algorithms=[ALGORITHM])
+            data = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         except jwt.ExpiredSignatureError:
             return jsonify({"status": "error", "message": "Token ha expirado"}), 401
         except jwt.InvalidTokenError:
