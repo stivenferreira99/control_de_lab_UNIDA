@@ -23,4 +23,4 @@ def create_app():
 if __name__ == '__main__':
     app = create_app()
     app.config['DEBUG'] = True
-    app.run(host='127.0.0.1', port=5001)  # Cambia 5001 por cualquier puerto disponible
+    app.run(host='127.0.0.1', port=5000)  # Cambia 5001 por cualquier puerto disponible

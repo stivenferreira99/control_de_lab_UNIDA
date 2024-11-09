@@ -25,132 +25,118 @@ class Sesion:
         return cursor.fetchone() is not None
 
     @staticmethod
-    def verificar_existe_usuario(cursor, contrasena, matricula):
-        cursor.execute("SELECT matricula FROM usuario WHERE matricula = %s AND contrasena = %s", (matricula, contrasena))
-        return cursor.fetchone() is not None
+    def verificar_sesion_activa(cursor, matriculas):
+        for matricula in matriculas:
+            # Verifica si existe una sesión activa para la matrícula
+            cursor.execute("""
+                SELECT id_sesion, id_equipo FROM sesion 
+                WHERE id_alumno = (
+                    SELECT id_alumno FROM alumno WHERE matricula = %s
+                ) AND estado = 'activo'
+            """, (matricula,))
 
-    @staticmethod
-    def verificar_sesion_activa(matriculas):
-        conn = get_db_connection()
-        try:
-            cursor = conn.cursor()
-            for matricula in matriculas:
+            sesiones = cursor.fetchall()  # Obtiene todas las sesiones activas
+
+            # Si hay sesiones activas, actualiza a 'inactivo' y cambia el equipo a 'disponible'
+            for sesion in sesiones:
+                id_sesion, id_equipo = sesion  # Extrae id_sesion e id_equipo
+
+                # Cambia el estado de la sesión a 'inactivo' y asigna la fecha/hora de finalización
                 cursor.execute("""
-                    SELECT s.id_sesion 
-                    FROM Sesion s
-                    JOIN Alumno a ON s.id_alumno = a.id_alumno
-                    WHERE a.matricula = %s AND s.estado = 'Activo'
-                """, (matricula,))
-                sesion = cursor.fetchone()
-                if sesion:
-                    cursor.execute("""
-                        UPDATE Sesion 
-                        SET estado = 'Inactivo', fecha_hora_fin = NOW() 
-                        WHERE id_sesion = %s
-                    """, (sesion[0],))
-            conn.commit()
-        except Exception as e:
-            print(f"Error al verificar sesiones activas: {str(e)}")
-            raise
-        finally:
-            cursor.close()
-            conn.close()
+                    UPDATE sesion 
+                    SET estado = 'inactivo', fecha_hora_fin = NOW() 
+                    WHERE id_sesion = %s
+                """, (id_sesion,))
+
+                # Cambia el estado del equipo a 'disponible' cuando se cierra la sesión
+                cursor.execute("""
+                    UPDATE equipo 
+                    SET estado_equipo = 'disponible' 
+                    WHERE id_equipo = %s
+                """, (id_equipo,))
 
     @staticmethod
-    def crear_nueva_sesion(cursor, id_equipo, id_alumno, ip_maquina, nombre_pc, matricula, contrasena):
-        """
-        Crea una nueva sesión y cambia el estado del equipo a 'en uso'.
-        """
-        # Verificar si el equipo está disponible
-        cursor.execute("""
-            SELECT estado_equipo FROM equipo WHERE nombre_pc = %s
-        """, (nombre_pc,))
+    def crear_nueva_sesion(cursor, nombre_maquina, matricula1, matricula2, ip_maquina, contrasena):
+        # Primero verifica y cierra sesiones activas existentes
+        Sesion.verificar_sesion_activa(cursor, [matricula1, matricula2] if matricula2 else [matricula1])
+        
+        # Obtiene el id_equipo y Laboratorio basado en el nombre de la máquina
+        cursor.execute("SELECT id_equipo, Laboratorio FROM equipo WHERE nombre_pc = %s", (nombre_maquina,))
         equipo = cursor.fetchone()
+        
+        if not equipo:
+            return {"status": "error", "message": f"El equipo con nombre {nombre_maquina} no está registrado."}
+        
+        id_equipo, laboratorio = equipo  # Obtén el id_equipo y el valor de Laboratorio
+        
+        # Si la máquina está en uso, cambia su estado a 'disponible' antes de crear la nueva sesión
+        cursor.execute("""SELECT estado_equipo FROM equipo WHERE id_equipo = %s""", (id_equipo,))
+        estado_equipo = cursor.fetchone()[0]
 
-        if equipo and equipo[0] == 'en uso':
-            return {"status": "error", "message": "El equipo está en uso por otra sesión."}
+        if estado_equipo == 'en uso':
+            # Cambia el estado del equipo a 'disponible' antes de crear una nueva sesión
+            cursor.execute("""
+                UPDATE equipo 
+                SET estado_equipo = 'disponible', IP_equipo = %s
+                WHERE id_equipo = %s
+            """, (ip_maquina, id_equipo))  # Actualiza la IP
 
-        # Obtener el id_alumno a partir de la matricula
+        # Cambia el estado del equipo a 'en uso' para la nueva sesión
         cursor.execute("""
-            SELECT id_alumno FROM alumno WHERE matricula = %s
-        """, (matricula,))
-        alumno = cursor.fetchone()
+            UPDATE equipo 
+            SET estado_equipo = 'en uso', IP_equipo = %s
+            WHERE id_equipo = %s
+        """, (ip_maquina, id_equipo))  # Actualiza la IP
 
-        if not alumno:
-            return {"status": "error", "message": "El alumno no está registrado."}
+        # Recupera y verifica el id de cada alumno
+        alumno_ids = []
+        for matricula in [matricula1, matricula2] if matricula2 else [matricula1]:
+            cursor.execute("SELECT id_alumno FROM alumno WHERE matricula = %s", (matricula,))
+            alumno = cursor.fetchone()
+            if not alumno:
+                return {"status": "error", "message": f"La matrícula proporcionada  {matricula} no está registrada."}
+            alumno_ids.append(alumno[0])
 
-        # Si el equipo está disponible y el alumno existe, crear la nueva sesión
-        cursor.execute("""
-            INSERT INTO Sesion (id_equipo, id_alumno, contrasena, ip_maquina, nombre_pc, fecha_hora_inicio, estado)
-            VALUES (%s, %s, %s, %s, %s, NOW(), 'activo')
-        """, (id_equipo, alumno[0], contrasena, ip_maquina, nombre_pc))
-
-        # Actualizar el estado del equipo a 'en uso'
-        cursor.execute("""
-            UPDATE equipo
-            SET estado_equipo = 'en uso'
-            WHERE nombre_pc = %s
-        """, (nombre_pc,))
+        # Crea una nueva sesión para cada alumno y agrega el Laboratorio
+        for id_alumno in alumno_ids:
+            cursor.execute("""
+                INSERT INTO sesion (id_equipo, id_alumno, contrasena, ip_maquina, nombre_pc, fecha_hora_inicio, estado, Laboratorio)
+                VALUES (%s, %s, %s, %s, %s, NOW(), 'activo', %s)
+            """, (id_equipo, id_alumno, contrasena, ip_maquina, nombre_maquina, laboratorio))  # Inserta el Laboratorio
         
         return {"status": "success", "message": "Sesión creada exitosamente."}
 
-    @staticmethod
-    def create_session(id_equipo, matricula1, matricula2, ip_maquina, nombre_pc, contrasena):
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        try:
-            # Verificar si los alumnos existen
-            for matricula in [matricula1, matricula2] if matricula2 else [matricula1]:
-                if not Sesion.verificar_existe_alumno(cursor, matricula):
-                    return {"status": "error", "message": f"El alumno con matrícula {matricula} no existe en la base de datos"}
-
-            # Cerrar sesiones activas si existen
-            Sesion.verificar_sesion_activa([matricula1, matricula2] if matricula2 else [matricula1])
-
-            # Crear la nueva sesión
-            response = Sesion.crear_nueva_sesion(cursor, id_equipo, matricula1, ip_maquina, nombre_pc, matricula1, contrasena)
-            return response
-
-        except Exception as e:
-            print(f"Error al crear sesión: {str(e)}")
-            return {"status": "error", "message": "Error al crear sesión"}
-        finally:
-            cursor.close()
-            conn.close()
 
     @staticmethod
     def cerrar_sesion(cursor, matricula, id_equipo):
-        # Verificar si el alumno está registrado
         cursor.execute("""
-            SELECT COUNT(*) FROM proyectosui.alumno WHERE matricula = %s
+            SELECT COUNT(*) FROM alumno WHERE matricula = %s
         """, (matricula,))
         alumno_existente = cursor.fetchone()[0]
 
         if alumno_existente == 0:
             return {"status": "error", "message": "El alumno no está registrado."}
 
-        # Verificar si hay una sesión activa
         cursor.execute("""
-            SELECT COUNT(*) FROM proyectosui.sesion a
-            JOIN proyectosui.alumno b ON a.id_alumno = b.id_alumno
-            WHERE b.matricula = %s AND a.id_equipo = %s AND a.estado = 'Activo'
+            SELECT COUNT(*) FROM sesion s
+            JOIN alumno a ON s.id_alumno = a.id_alumno
+            WHERE a.matricula = %s AND s.id_equipo = %s AND s.estado = 'activo'
         """, (matricula, id_equipo))
         sesion_activa = cursor.fetchone()[0]
 
         if sesion_activa == 0:
             return {"status": "error", "message": "No tiene sesión activa."}
 
-        # Cerrar la sesión si existe
         cursor.execute("""
-            UPDATE proyectosui.sesion a
-            JOIN proyectosui.alumno b ON a.id_alumno = b.id_alumno
-            SET a.estado = 'Inactivo', a.fecha_hora_fin = NOW()
-            WHERE b.matricula = %s AND a.id_equipo = %s AND a.estado = 'Activo'
+            UPDATE sesion s
+            JOIN alumno a ON s.id_alumno = a.id_alumno
+            SET s.estado = 'inactivo', s.fecha_hora_fin = NOW()
+            WHERE a.matricula = %s AND s.id_equipo = %s AND s.estado = 'activo'
         """, (matricula, id_equipo))
 
         cursor.execute("""
-            UPDATE Equipo 
-            SET estado_equipo = 'Disponible'
+            UPDATE equipo 
+            SET estado_equipo = 'disponible'
             WHERE id_equipo = %s
         """, (id_equipo,))
 

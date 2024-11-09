@@ -3,9 +3,8 @@ from backend.db import get_db_connection
 from backend.models.sesion import Sesion
 from backend.models.auth import token_required
 from datetime import datetime
-from functools import wraps
 
-session_blueprint = Blueprint('session', __name__)
+session_blueprint = Blueprint('sesion', __name__)
 
 @session_blueprint.route('/consulta_session/<string:matricula>', methods=['GET'])
 @token_required
@@ -16,11 +15,9 @@ def consulta_session(matricula):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # Validar matrícula
         if not Sesion.validar_matricula(matricula):
             return jsonify({"status": "error", "message": "Formato de matrícula incorrecta"}), 400
 
-        # Verificar si el alumno existe
         cursor.execute("""
             SELECT id_alumno FROM alumno WHERE matricula = %s
         """, (matricula,))
@@ -28,19 +25,17 @@ def consulta_session(matricula):
         if not alumno:
             return jsonify({"status": "error", "message": "El alumno no existe en la base de datos"}), 404
 
-        # Consultar las sesiones activas del alumno
         cursor.execute("""
             SELECT s.id_sesion, s.id_equipo, s.estado, s.fecha_hora_inicio, s.fecha_hora_fin
             FROM sesion s
             JOIN alumno a ON s.id_alumno = a.id_alumno
-            WHERE a.matricula = %s AND s.estado = 'Activo'
+            WHERE a.matricula = %s AND s.estado = 'activo'
         """, (matricula,))
         sesiones = cursor.fetchall()
 
         if not sesiones:
             return jsonify({"status": "error", "message": "No hay sesiones activas para el alumno"}), 404
 
-        # Preparar los datos de las sesiones activas
         sesiones_activas = [
             {
                 "id_sesion": sesion[0],
@@ -48,7 +43,7 @@ def consulta_session(matricula):
                 "estado": sesion[2],
                 "inicio_sesion": sesion[3],
                 "fin_sesion": sesion[4] if sesion[4] else None,
-                "tiempo_activo": str(datetime.now() - sesion[3]) if sesion[2] == 'Activo' else None
+                "tiempo_activo": str(datetime.now() - sesion[3]) if sesion[2] == 'activo' else None
             }
             for sesion in sesiones
         ]
@@ -59,113 +54,96 @@ def consulta_session(matricula):
         print(f"Error al procesar la solicitud: {str(e)}")
         return jsonify({"status": "error", "message": "Error interno del servidor"}), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        conn.close()
 
-
-# Endpoint para crear una nueva sesión
-@session_blueprint.route('/crear', methods=['POST'])
-@token_required
+@session_blueprint.route('/crear_sesion', methods=['POST'])
+@token_required  # Agregamos el decorador para verificar el token
 def crear_sesion():
+    # Obtén los datos del cuerpo de la solicitud
     data = request.get_json()
-    matricula1 = data.get('matricula1')
-    matricula2 = data.get('matricula2')
-    id_equipo = data.get('id_equipo')
-    ip_maquina = data.get('ip_maquina')
     nombre_maquina = data.get('nombre_maquina')
+    matricula1 = data.get('matricula1')
+    matricula2 = data.get('matricula2', None)  # matricula2 es opcional
+    ip_maquina = data.get('ip_maquina')
     contrasena = data.get('contrasena')
 
-    response = {"status": "success"}
-
+    # Validación de entrada
+    if not nombre_maquina or not matricula1 or not ip_maquina or not contrasena:
+        return jsonify({"status": "error", "message": "Faltan datos requeridos."}), 400
+    
+    conn = None
+    cursor = None
     try:
+        # Abre la conexión a la base de datos
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Llamar a la función de creación de sesión
-        result = Sesion.crear_nueva_sesion(cursor, id_equipo, matricula1, ip_maquina, nombre_maquina, matricula2, contrasena)
-        response.update(result)
+        # Verifica que las matrículas estén registradas
+        if not Sesion.verificar_existe_alumno(cursor, matricula1):
+            return jsonify({"status": "error", "message": f"La matrícula {matricula1} no está registrada."}), 400
+        if matricula2 and not Sesion.verificar_existe_alumno(cursor, matricula2):
+            return jsonify({"status": "error", "message": f"La matrícula {matricula2} no está registrada."}), 400
 
-        conn.commit()
+        # Llama a la función para crear una nueva sesión
+        result = Sesion.crear_nueva_sesion(cursor, nombre_maquina, matricula1, matricula2, ip_maquina, contrasena)
+
+        # Si todo ha ido bien, confirma la transacción
+        if result["status"] == "success":
+            conn.commit()
+            return jsonify(result), 200
+        else:
+            # En caso de error, no confirmamos la transacción
+            conn.rollback()
+            return jsonify(result), 400
+
     except Exception as e:
-        print(f"Error al crear la sesión: {str(e)}")
-        return jsonify({"status": "error", "message": "Error al crear la sesión"}), 500
+        print(f"Error al procesar la solicitud: {str(e)}")
+        return jsonify({"status": "error", "message": "Error interno del servidor"}), 500
+
     finally:
-        if 'conn' in locals():
+        # Verifica si el cursor y la conexión fueron creados antes de intentar cerrarlos
+        if cursor:
+            cursor.close()
+        if conn:
             conn.close()
 
-    return jsonify(response), 200
-
-# Endpoint para finalizar una sesión
-@session_blueprint.route('/end', methods=['POST'])
-@token_required
-def end_session():
+@session_blueprint.route('/cerrar_sesion', methods=['POST'])
+@token_required  # Agregamos el decorador para verificar el token
+def cerrar_sesion():
     data = request.get_json()
     matricula = data.get('matricula')
     id_equipo = data.get('id_equipo')
 
-    if matricula and not Sesion.validar_matricula(matricula):
-        return jsonify({"status": "error", "message": "Formato de matrícula incorrecta"}), 400
+    # Validación de entrada
+    if not matricula or not id_equipo:
+        return jsonify({"status": "error", "message": "Faltan datos requeridos."}), 400
 
-    response = {"status": "success"}
-
+    conn = None
+    cursor = None
     try:
+        # Abre la conexión a la base de datos
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Llama a la función para cerrar sesiones
+        # Llama a la función para cerrar la sesión
         result = Sesion.cerrar_sesion(cursor, matricula, id_equipo)
-        response.update(result)
 
-        conn.commit()
-    except Exception as e:
-        print(f"Error al cerrar la sesión: {str(e)}")
-        return jsonify({"status": "error", "message": "Error al cerrar la sesión"}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-    return jsonify(response), 200
-
-
-
-#programado directo aca, para que liste todas sesiones activas nomas
-@session_blueprint.route('/sesiones_activas', methods=['GET'])
-@token_required
-def sesiones_activas():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        # Consultar todas las sesiones activas
-        cursor.execute("""
-            SELECT s.id_sesion, s.id_equipo, s.estado, s.fecha_hora_inicio, s.fecha_hora_fin, e.nombre_pc 
-            FROM sesion s
-            JOIN equipo e ON s.id_equipo = e.id_equipo
-            WHERE s.estado = 'Activo'
-        """)
-        sesiones = cursor.fetchall()
-
-        if not sesiones:
-            return jsonify({"status": "error", "message": "No hay sesiones activas"}), 404
-
-        # Preparar los datos de las sesiones activas
-        sesiones_activas = [
-            {
-                "id_sesion": sesion[0],
-                "id_equipo": sesion[1],
-                "estado": sesion[2],
-                "inicio_sesion": sesion[3],
-                "fin_sesion": sesion[4] if sesion[4] else None,
-                "nombre_pc": sesion[5],
-                "tiempo_activo": str(datetime.now() - sesion[3]) if sesion[2] == 'Activo' else None
-            }
-            for sesion in sesiones
-        ]
-
-        return jsonify({"status": "success", "sesiones_activas": sesiones_activas}), 200
+        # Si todo ha ido bien, confirma la transacción
+        if result["status"] == "success":
+            conn.commit()
+            return jsonify(result), 200
+        else:
+            # En caso de error, no confirmamos la transacción
+            conn.rollback()
+            return jsonify(result), 400
 
     except Exception as e:
         print(f"Error al procesar la solicitud: {str(e)}")
         return jsonify({"status": "error", "message": "Error interno del servidor"}), 500
+
     finally:
-        if 'conn' in locals():
+        # Verifica si el cursor y la conexión fueron creados antes de intentar cerrarlos
+        if cursor:
+            cursor.close()
+        if conn:
             conn.close()
