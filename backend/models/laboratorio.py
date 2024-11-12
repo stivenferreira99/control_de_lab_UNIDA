@@ -20,9 +20,9 @@ class laboratorio:
         try:
             # Consulta para seleccionar las sesiones activas y unirlas con el equipo
             cursor.execute("""
-                SELECT sesion.id_sesion 
-                FROM sesion 
-                INNER JOIN equipo ON sesion.id_equipo = equipo.id_equipo 
+                SELECT sesion.id_sesion, sesion.id_equipo
+                FROM sesion
+                INNER JOIN equipo ON sesion.id_equipo = equipo.id_equipo
                 WHERE equipo.Laboratorio = %s AND sesion.estado = 'activo'
             """, (nombre_laboratorio,))
 
@@ -33,19 +33,19 @@ class laboratorio:
 
             # Iterar sobre las sesiones activas para cerrarlas
             for sesion in sesiones_activas:
-                id_sesion = sesion[0]
+                id_sesion, id_equipo = sesion
                 cursor.execute("""
-                    UPDATE sesion 
-                    SET estado = 'inactivo', fecha_hora_fin = NOW() 
+                    UPDATE sesion
+                    SET estado = 'inactivo', fecha_hora_fin = NOW()
                     WHERE id_sesion = %s
                 """, (id_sesion,))
 
-            # Actualizar el estado de los equipos a 'disponible' para aquellos que estaban en uso
-            cursor.execute("""
-                UPDATE equipo 
-                SET estado_equipo = 'disponible' 
-                WHERE Laboratorio = %s AND estado_equipo = 'ocupado'
-            """, (nombre_laboratorio,))
+                # Cambiar el estado del equipo a 'disponible'
+                cursor.execute("""
+                    UPDATE equipo
+                    SET estado_equipo = 'disponible'
+                    WHERE id_equipo = %s
+                """, (id_equipo,))
 
             # Confirmar los cambios en la base de datos
             connection.commit()

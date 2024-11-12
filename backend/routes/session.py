@@ -112,10 +112,9 @@ def crear_sesion():
 def cerrar_sesion():
     data = request.get_json()
     matricula = data.get('matricula')
-    id_equipo = data.get('id_equipo')
 
     # Validación de entrada
-    if not matricula or not id_equipo:
+    if not matricula:
         return jsonify({"status": "error", "message": "Faltan datos requeridos."}), 400
 
     conn = None
@@ -126,7 +125,7 @@ def cerrar_sesion():
         cursor = conn.cursor()
 
         # Llama a la función para cerrar la sesión
-        result = Sesion.cerrar_sesion(cursor, matricula, id_equipo)
+        result = Sesion.cerrar_sesion(cursor, matricula)
 
         # Si todo ha ido bien, confirma la transacción
         if result["status"] == "success":
