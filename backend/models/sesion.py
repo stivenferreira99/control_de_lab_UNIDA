@@ -57,7 +57,7 @@ class Sesion:
 
     @staticmethod
     def crear_nueva_sesion(cursor, nombre_maquina, matricula1, matricula2, ip_maquina, contrasena):
-        # Primero verifica y cierra sesiones activas existentes
+    # Primero verifica y cierra sesiones activas existentes
         Sesion.verificar_sesion_activa(cursor, [matricula1, matricula2] if matricula2 else [matricula1])
         
         # Obtiene el id_equipo y Laboratorio basado en el nombre de la máquina
@@ -74,19 +74,70 @@ class Sesion:
         estado_equipo = cursor.fetchone()[0]
 
         if estado_equipo == 'en uso':
+            # Antes de cambiar el estado de la máquina, debemos cerrar la sesión activa si existe
+            cursor.execute("""SELECT id_sesion FROM sesion WHERE id_equipo = %s AND estado = 'activo'""", (id_equipo,))
+            sesion_activa = cursor.fetchone()
+
+            if sesion_activa:
+                # Si hay una sesión activa, cerramos esa sesión
+                cursor.execute("""UPDATE sesion SET estado = 'inactivo', fecha_hora_fin = NOW() WHERE id_sesion = %s""", (sesion_activa[0],))
+
             # Cambia el estado del equipo a 'disponible' antes de crear una nueva sesión
-            cursor.execute("""
-                UPDATE equipo 
-                SET estado_equipo = 'disponible', IP_equipo = %s
-                WHERE id_equipo = %s
-            """, (ip_maquina, id_equipo))  # Actualiza la IP
+            cursor.execute("""UPDATE equipo SET estado_equipo = 'disponible', IP_equipo = %s WHERE id_equipo = %s""", (ip_maquina, id_equipo))
 
         # Cambia el estado del equipo a 'en uso' para la nueva sesión
-        cursor.execute("""
-            UPDATE equipo 
-            SET estado_equipo = 'en uso', IP_equipo = %s
-            WHERE id_equipo = %s
-        """, (ip_maquina, id_equipo))  # Actualiza la IP
+        cursor.execute("""UPDATE equipo SET estado_equipo = 'en uso', IP_equipo = %s WHERE id_equipo = %s""", (ip_maquina, id_equipo))
+
+        # Recupera y verifica el id de cada alumno
+        alumno_ids = []
+        for matricula in [matricula1, matricula2] if matricula2 else [matricula1]:
+            cursor.execute("SELECT id_alumno FROM alumno WHERE matricula = %s", (matricula,))
+            alumno = cursor.fetchone()
+            if not alumno:
+                return {"status": "error", "message": f"La matrícula proporcionada  {matricula} no está registrada."}
+            alumno_ids.append(alumno[0])
+
+        # Crea una nueva sesión para cada alumno y agrega el Laboratorio
+        for id_alumno in alumno_ids:
+            cursor.execute("""
+                INSERT INTO sesion (id_equipo, id_alumno, contrasena, ip_maquina, nombre_pc, fecha_hora_inicio, estado, Laboratorio)
+                VALUES (%s, %s, %s, %s, %s, NOW(), 'activo', %s)
+            """, (id_equipo, id_alumno, contrasena, ip_maquina, nombre_maquina, laboratorio))  # Inserta el Laboratorio
+        
+        return {"status": "success", "message": "Sesión creada exitosamente."}
+
+
+    def crear_nueva_sesion(cursor, nombre_maquina, matricula1, matricula2, ip_maquina, contrasena):
+    # Primero verifica y cierra sesiones activas existentes
+        Sesion.verificar_sesion_activa(cursor, [matricula1, matricula2] if matricula2 else [matricula1])
+        
+        # Obtiene el id_equipo y Laboratorio basado en el nombre de la máquina
+        cursor.execute("SELECT id_equipo, Laboratorio FROM equipo WHERE nombre_pc = %s", (nombre_maquina,))
+        equipo = cursor.fetchone()
+        
+        if not equipo:
+            return {"status": "error", "message": f"El equipo con nombre {nombre_maquina} no está registrado."}
+        
+        id_equipo, laboratorio = equipo  # Obtén el id_equipo y el valor de Laboratorio
+        
+        # Si la máquina está en uso, cambia su estado a 'disponible' antes de crear la nueva sesión
+        cursor.execute("""SELECT estado_equipo FROM equipo WHERE id_equipo = %s""", (id_equipo,))
+        estado_equipo = cursor.fetchone()[0]
+
+        if estado_equipo == 'en uso':
+            # Antes de cambiar el estado de la máquina, debemos cerrar la sesión activa si existe
+            cursor.execute("""SELECT id_sesion FROM sesion WHERE id_equipo = %s AND estado = 'activo'""", (id_equipo,))
+            sesion_activa = cursor.fetchone()
+
+            if sesion_activa:
+                # Si hay una sesión activa, cerramos esa sesión
+                cursor.execute("""UPDATE sesion SET estado = 'inactivo', fecha_hora_fin = NOW() WHERE id_sesion = %s""", (sesion_activa[0],))
+
+            # Cambia el estado del equipo a 'disponible' antes de crear una nueva sesión
+            cursor.execute("""UPDATE equipo SET estado_equipo = 'disponible', IP_equipo = %s WHERE id_equipo = %s""", (ip_maquina, id_equipo))
+
+        # Cambia el estado del equipo a 'en uso' para la nueva sesión
+        cursor.execute("""UPDATE equipo SET estado_equipo = 'en uso', IP_equipo = %s WHERE id_equipo = %s""", (ip_maquina, id_equipo))
 
         # Recupera y verifica el id de cada alumno
         alumno_ids = []
@@ -108,36 +159,46 @@ class Sesion:
 
 
     @staticmethod
-    def cerrar_sesion(cursor, matricula, id_equipo):
-        cursor.execute("""
-            SELECT COUNT(*) FROM alumno WHERE matricula = %s
-        """, (matricula,))
-        alumno_existente = cursor.fetchone()[0]
+    def cerrar_sesion(cursor, matricula):
+        try:
+            # Recupera el id_alumno de la matrícula
+            cursor.execute("SELECT id_alumno FROM alumno WHERE matricula = %s", (matricula,))
+            alumno = cursor.fetchone()
 
-        if alumno_existente == 0:
-            return {"status": "error", "message": "El alumno no está registrado."}
+            if not alumno:
+                return {"status": "error", "message": f"La matrícula {matricula} no está registrada."}
 
-        cursor.execute("""
-            SELECT COUNT(*) FROM sesion s
-            JOIN alumno a ON s.id_alumno = a.id_alumno
-            WHERE a.matricula = %s AND s.id_equipo = %s AND s.estado = 'activo'
-        """, (matricula, id_equipo))
-        sesion_activa = cursor.fetchone()[0]
+            id_alumno = alumno[0]
 
-        if sesion_activa == 0:
-            return {"status": "error", "message": "No tiene sesión activa."}
+            # Busca la sesión activa del alumno
+            cursor.execute("""
+                SELECT sesion.id_sesion, sesion.id_equipo
+                FROM sesion
+                INNER JOIN equipo ON sesion.id_equipo = equipo.id_equipo
+                WHERE sesion.id_alumno = %s AND sesion.estado = 'activo'
+            """, (id_alumno,))
+            sesion_activa = cursor.fetchone()
 
-        cursor.execute("""
-            UPDATE sesion s
-            JOIN alumno a ON s.id_alumno = a.id_alumno
-            SET s.estado = 'inactivo', s.fecha_hora_fin = NOW()
-            WHERE a.matricula = %s AND s.id_equipo = %s AND s.estado = 'activo'
-        """, (matricula, id_equipo))
+            if not sesion_activa:
+                return {"status": "error", "message": f"No hay una sesión activa para el alumno con matrícula {matricula}."}
 
-        cursor.execute("""
-            UPDATE equipo 
-            SET estado_equipo = 'disponible'
-            WHERE id_equipo = %s
-        """, (id_equipo,))
+            id_sesion, id_equipo = sesion_activa
 
-        return {"status": "success", "message": "Sesión cerrada exitosamente."}
+            # Actualiza la sesión a 'inactiva' y asigna fecha de cierre
+            cursor.execute("""
+                UPDATE sesion
+                SET estado = 'inactivo', fecha_hora_fin = NOW()
+                WHERE id_sesion = %s
+            """, (id_sesion,))
+
+            # Cambia el estado del equipo a 'disponible'
+            cursor.execute("""
+                UPDATE equipo
+                SET estado_equipo = 'disponible'
+                WHERE id_equipo = %s
+            """, (id_equipo,))
+
+            return {"status": "success", "message": f"Sesión del alumno con matrícula {matricula} cerrada exitosamente."}
+
+        except Exception as e:
+            return {"status": "error", "message": f"Error al cerrar la sesión: {str(e)}"}
