@@ -1,5 +1,0 @@
-flask
-sqlalchemy
-mysql-connector-python
-pymysql
-JWT
