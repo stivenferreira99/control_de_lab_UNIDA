@@ -1,48 +1,111 @@
-from sqlalchemy import Column, Integer, String, Enum
-from backend.db import Base
-import re
+# models/equipo.py
 
-class Equipo(Base):
-    __tablename__ = 'equipo'
+from backend.db import get_db_connection
 
-    id_equipo = Column(Integer, primary_key=True, autoincrement=True)
-    nombre_pc = Column(String(100), unique=True, nullable=False)
-    ip_equipo = Column(String(45), nullable=False)
-    monitor = Column(String(50), nullable=True)
-    gabinete = Column(String(50), nullable=True)
-    teclado = Column(String(50), nullable=True)
-    mouse = Column(String(50), nullable=True)
-    receptor = Column(String(50), nullable=True)
-    estado_equipo = Column(Enum('disponible', 'en uso', 'en reparación'), default='disponible')
-    Laboratorio = Column(String(50), nullable=True)
+class Equipo:
+    @staticmethod
+    def agregar_equipo(nombre_pc, ip_equipo, laboratorio, monitor=None, gabinete=None, teclado=None, mouse=None, receptor=None, estado_equipo="disponible"):
+        connection = get_db_connection()
+        if connection is None:
+            return {"status": "error", "message": "No se pudo obtener la conexión a la base de datos."}
 
-    def __init__(self, nombre_pc, ip_equipo):
-        self.nombre_pc = nombre_pc
-        self.set_ip_equipo(ip_equipo)
+        cursor = connection.cursor()
 
-    def set_ip_equipo(self, ip_equipo):
-        if not self.validar_ip(ip_equipo):
-            raise ValueError(f"Dirección IP inválida: {ip_equipo}")
-        self.ip_equipo = ip_equipo
+        try:
+            # Inserta un nuevo equipo en la base de datos
+            cursor.execute("""
+                INSERT INTO equipo (nombre_pc, monitor, gabinete, teclado, mouse, receptor, estado_equipo, IP_equipo, Laboratorio)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (nombre_pc, monitor, gabinete, teclado, mouse, receptor, estado_equipo, ip_equipo, laboratorio))
 
-    def validar_ip(self, ip):
-        patron_ip = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$")
-        return bool(patron_ip.match(ip))
+            connection.commit()
+            return {"status": "success", "message": "Equipo agregado exitosamente."}
 
-    def __repr__(self):
-        return f"<Equipo(nombre_pc={self.nombre_pc}, ip_equipo={self.ip_equipo})>"
+        except Exception as e:
+            return {"status": "error", "message": f"Error al agregar equipo: {str(e)}"}
 
-    @classmethod
-    def update_equipo(cls, db_session, id_equipo, nombre_pc=None, ip_equipo=None):
-        equipo = db_session.query(cls).filter_by(id_equipo=id_equipo).first()
-        if not equipo:
-            print(f"No se encontró el equipo con id {id_equipo}.")
-            return
+        finally:
+            cursor.close()
+            connection.close()
 
-        if nombre_pc:
-            equipo.nombre_pc = nombre_pc
-        if ip_equipo:
-            equipo.set_ip_equipo(ip_equipo)
+    @staticmethod
+    def modificar_equipo(nombre_pc, ip_equipo=None, laboratorio=None, monitor=None, gabinete=None, teclado=None, mouse=None, receptor=None, estado_equipo=None):
+        connection = get_db_connection()
+        if connection is None:
+            return {"status": "error", "message": "No se pudo obtener la conexión a la base de datos."}
 
-        db_session.commit()
-        print(f"Equipo {id_equipo} actualizado exitosamente.")
+        cursor = connection.cursor()
+
+        try:
+            # Construye la consulta de actualización dinámica
+            updates = []
+            values = []
+
+            if ip_equipo is not None:
+                updates.append("IP_equipo = %s")
+                values.append(ip_equipo)
+            if laboratorio is not None:
+                updates.append("Laboratorio = %s")
+                values.append(laboratorio)
+            if monitor is not None:
+                updates.append("monitor = %s")
+                values.append(monitor)
+            if gabinete is not None:
+                updates.append("gabinete = %s")
+                values.append(gabinete)
+            if teclado is not None:
+                updates.append("teclado = %s")
+                values.append(teclado)
+            if mouse is not None:
+                updates.append("mouse = %s")
+                values.append(mouse)
+            if receptor is not None:
+                updates.append("receptor = %s")
+                values.append(receptor)
+            if estado_equipo is not None:
+                updates.append("estado_equipo = %s")
+                values.append(estado_equipo)
+
+            if not updates:
+                return {"status": "error", "message": "No se proporcionaron campos para actualizar."}
+
+            values.append(nombre_pc)
+
+            # Ejecuta la consulta de actualización
+            cursor.execute(f"""
+                UPDATE equipo
+                SET {', '.join(updates)}
+                WHERE nombre_pc = %s
+            """, tuple(values))
+
+            connection.commit()
+            return {"status": "success", "message": "Equipo modificado exitosamente."}
+
+        except Exception as e:
+            return {"status": "error", "message": f"Error al modificar equipo: {str(e)}"}
+
+        finally:
+            cursor.close()
+            connection.close()
+
+    @staticmethod
+    def eliminar_equipo(nombre_pc):
+        connection = get_db_connection()
+        if connection is None:
+            return {"status": "error", "message": "No se pudo obtener la conexión a la base de datos."}
+
+        cursor = connection.cursor()
+
+        try:
+            # Elimina el equipo de la base de datos
+            cursor.execute("DELETE FROM equipo WHERE nombre_pc = %s", (nombre_pc,))
+
+            connection.commit()
+            return {"status": "success", "message": "Equipo eliminado exitosamente."}
+
+        except Exception as e:
+            return {"status": "error", "message": f"Error al eliminar equipo: {str(e)}"}
+
+        finally:
+            cursor.close()
+            connection.close()
